@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # SHA-pinned actions (see .github/workflows/_docker-build.yml) get
+  # version-bump PRs from Dependabot here, which update both the SHA and
+  # its trailing `# vX.Y.Z` comment together. Dependabot does NOT emit
+  # vulnerability alerts for SHA-pinned actions the way it does for
+  # tag-pinned ones, so that comment is the only place version info lives —
+  # keep it accurate; don't hand-edit the SHA without updating it.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

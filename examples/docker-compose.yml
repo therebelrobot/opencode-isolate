@@ -1,0 +1,93 @@
+# Example: consume the prebuilt isolate-opencode images from GHCR in
+# another workspace, instead of building from source.
+#
+# This mirrors the source repo's docker-compose.yml exactly - same
+# networks, same cap_drop/read_only/tmpfs hardening on the `opencode`
+# service, same NET_ADMIN + iptables lockdown on `gateway`. Nothing here is
+# a weaker copy; the only difference is `image:` instead of `build:`. See
+# the source repo's README for what each isolation layer actually stops.
+#
+# Setup:
+#   1. Copy this whole examples/ directory's contents into your workspace
+#      (docker-compose.yml, squid.conf, opencode.json, .env.example).
+#   2. mkdir -p workspace logs/squid
+#   3. cp .env.example .env  and fill in OPENROUTER_API_KEY + ISOLATE_OPENCODE_TAG.
+#   4. docker compose pull
+#   5. docker compose run --rm opencode opencode run "say hi" \
+#        -m openrouter/deepseek/deepseek-v4-flash --format json
+#
+# Pin ISOLATE_OPENCODE_TAG to a specific released minor (e.g. 1.2) for
+# convenience, or replace the tag on each `image:` line below with
+# `@sha256:<digest>` for full immutability - see the source repo's README
+# ("Consuming these images elsewhere") for how to find and verify digests.
+
+networks:
+  isolated:
+    internal: true   # opencode has no route to the internet except via gateway
+  egress: {}         # gateway's only link to the outside world
+
+services:
+  gateway:
+    image: ghcr.io/therebelrobot/isolate-opencode-gateway:${ISOLATE_OPENCODE_TAG:?set ISOLATE_OPENCODE_TAG in .env, e.g. 1.2}
+    cap_add:
+      - NET_ADMIN     # required for the iptables egress lockdown
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./logs/squid:/var/log/squid
+    networks:
+      - isolated
+      - egress
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check -f /etc/squid/squid.conf || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  poller:
+    image: ghcr.io/therebelrobot/isolate-opencode-poller:${ISOLATE_OPENCODE_TAG:?set ISOLATE_OPENCODE_TAG in .env, e.g. 1.2}
+    networks:
+      - isolated
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      HTTPS_PROXY: http://gateway:3128
+      NO_PROXY: localhost,127.0.0.1
+      POLL_INTERVAL: ${POLL_INTERVAL:-60}
+    volumes:
+      - ./logs:/logs
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  opencode:
+    image: ghcr.io/therebelrobot/isolate-opencode-agent:${ISOLATE_OPENCODE_TAG:?set ISOLATE_OPENCODE_TAG in .env, e.g. 1.2}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - isolated
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      HTTPS_PROXY: http://gateway:3128
+      HTTP_PROXY: http://gateway:3128
+      NO_PROXY: localhost,127.0.0.1
+    volumes:
+      - ./workspace:/workspace
+      - ./opencode.json:/home/agent/.config/opencode/opencode.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/agent/.local/share/opencode
+      - /home/agent/.local/state
+      - /home/agent/.cache
+      - /home/agent/.config/opencode
+    stdin_open: true
+    tty: true

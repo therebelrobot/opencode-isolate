@@ -1,0 +1,45 @@
+name: Release
+
+# One git tag (vX.Y.Z) versions all three images in lockstep. Push a tag,
+# CI builds + publishes gateway, agent, and poller together. See `make
+# release VERSION=X.Y.Z` and the "Releasing" section in README.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image-name: isolate-opencode-gateway
+            context: ./gateway
+            dockerfile: ./gateway/Dockerfile
+          - image-name: isolate-opencode-agent
+            context: .
+            dockerfile: ./Dockerfile
+            # NOTE: unpinned in this repo's .env/.env.example as of this
+            # writing (OPENCODE_VERSION=latest). Flagged to the user; using
+            # `latest` here keeps CI consistent with the local default, but
+            # it means published `agent` images are NOT reproducible across
+            # rebuilds until that's pinned to a specific opencode-ai version.
+            build-args: |
+              OPENCODE_VERSION=latest
+          - image-name: isolate-opencode-poller
+            context: ./poller
+            dockerfile: ./poller/Dockerfile
+    uses: ./.github/workflows/_docker-build.yml
+    with:
+      image-name: ${{ matrix.image-name }}
+      context: ${{ matrix.context }}
+      dockerfile: ${{ matrix.dockerfile }}
+      build-args: ${{ matrix.build-args }}
+    secrets: inherit

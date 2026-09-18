@@ -1,0 +1,73 @@
+networks:
+  isolated:
+    internal: true   # opencode has no route to the internet except via gateway
+  egress: {}         # gateway's only link to the outside world
+
+services:
+  gateway:
+    build: ./gateway
+    cap_add:
+      - NET_ADMIN     # required for the iptables egress lockdown
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./logs/squid:/var/log/squid
+    networks:
+      - isolated
+      - egress
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check -f /etc/squid/squid.conf || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  poller:
+    build: ./poller
+    networks:
+      - isolated
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      HTTPS_PROXY: http://gateway:3128
+      NO_PROXY: localhost,127.0.0.1
+      POLL_INTERVAL: ${POLL_INTERVAL:-60}
+    volumes:
+      - ./logs:/logs
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  opencode:
+    build:
+      context: .
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-latest}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - isolated
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      HTTPS_PROXY: http://gateway:3128
+      HTTP_PROXY: http://gateway:3128
+      NO_PROXY: localhost,127.0.0.1
+    volumes:
+      - ./workspace:/workspace
+      - ./opencode.json:/home/agent/.config/opencode/opencode.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/agent/.local/share/opencode
+      - /home/agent/.local/state
+      - /home/agent/.cache
+      - /home/agent/.config/opencode
+    stdin_open: true
+    tty: true
